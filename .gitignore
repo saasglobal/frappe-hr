@@ -1,0 +1,16 @@
+# ── Secrets — never commit ────────────────────────────────────
+.env
+
+# ── Local test data (macOS bind-mount dirs, not used in prod) ─
+data/
+
+# ── Build dependency — clone frappe_docker separately ─────────
+# See DEPLOYMENT.md Phase 1 for build instructions.
+frappe_docker/
+
+# ── Claude Code settings ──────────────────────────────────────
+.claude/
+
+# ── OS noise ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

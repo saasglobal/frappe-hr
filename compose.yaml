@@ -1,0 +1,174 @@
+# ============================================================
+# FrappeHR 15 - Docker Compose for TrueNAS Scale
+# ============================================================
+# Prerequisites:
+#   1. Build the custom image first (see apps.json + DEPLOYMENT.md)
+#   2. Copy .env.example to .env and fill in your values
+#   3. Ensure data directories exist before first run:
+#        mkdir -p ./data/{mariadb,redis,sites}
+#
+# Start the stack:
+#   docker compose up -d
+#
+# Create the Frappe site (run once):
+#   docker compose exec backend bench new-site ${SITE_NAME} \
+#     --db-root-password ${DB_ROOT_PASSWORD} \
+#     --install-app erpnext --install-app hrms \
+#     --admin-password ${ADMIN_PASSWORD}
+#
+# Data storage:
+#   All volumes are bind-mounted to host directories.
+#   Set DB_DATA_PATH, REDIS_DATA_PATH, SITES_PATH in .env.
+#   Defaults: ./data/mariadb  ./data/redis  ./data/sites
+#   TrueNAS:  /mnt/<pool>/apps/hrms/{mariadb,redis,sites}
+# ============================================================
+
+name: hrms
+
+x-customizable-image: &customizable-image
+  image: ${CUSTOM_IMAGE:-custom-hrms}:${CUSTOM_TAG:-15}
+  pull_policy: ${PULL_POLICY:-missing}
+
+x-depends-on-configurator: &depends-on-configurator
+  depends_on:
+    configurator:
+      condition: service_completed_successfully
+
+# Reusable sites bind-mount definition
+x-sites-volume: &sites-volume
+  type: bind
+  source: ${SITES_PATH:-./data/sites}
+  target: /home/frappe/frappe-bench/sites
+
+x-backend-defaults: &backend-defaults
+  <<: [ *depends-on-configurator, *customizable-image ]
+  restart: unless-stopped
+  volumes:
+    - *sites-volume
+
+services:
+
+  # ── Database ──────────────────────────────────────────────
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
+      start_period: 10s
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is required}
+      MARIADB_AUTO_UPGRADE: "1"
+    volumes:
+      - type: bind
+        source: ${DB_DATA_PATH:-./data/mariadb}
+        target: /var/lib/mysql
+
+  # ── Redis ─────────────────────────────────────────────────
+  redis-cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  redis-queue:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ${REDIS_DATA_PATH:-./data/redis}
+        target: /data
+
+  # ── Frappe Configurator (runs once on start) ──────────────
+  configurator:
+    <<: *customizable-image
+    restart: on-failure
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        ls -1 apps > sites/apps.txt;
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
+        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
+        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      SOCKETIO_PORT: "9000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - *sites-volume
+
+  # ── Frappe Backend ────────────────────────────────────────
+  backend:
+    <<: *backend-defaults
+
+  # ── Nginx Frontend (HTTP only — SSL handled by external proxy) ──
+  frontend:
+    <<: *customizable-image
+    restart: unless-stopped
+    command:
+      - nginx-entrypoint.sh
+    environment:
+      BACKEND: backend:8000
+      FRAPPE_SITE_NAME_HEADER: ${FRAPPE_SITE_NAME_HEADER:-$$host}
+      SOCKETIO: websocket:9000
+      UPSTREAM_REAL_IP_ADDRESS: ${UPSTREAM_REAL_IP_ADDRESS:-127.0.0.1}
+      UPSTREAM_REAL_IP_HEADER: ${UPSTREAM_REAL_IP_HEADER:-X-Forwarded-For}
+      UPSTREAM_REAL_IP_RECURSIVE: ${UPSTREAM_REAL_IP_RECURSIVE:-off}
+      PROXY_READ_TIMEOUT: ${PROXY_READ_TIMEOUT:-120}
+      CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE:-50m}
+    ports:
+      - "${HTTP_PUBLISH_PORT:-8080}:8080"
+    depends_on:
+      - backend
+      - websocket
+    volumes:
+      - *sites-volume
+
+  # ── WebSocket (Socket.IO) ─────────────────────────────────
+  websocket:
+    <<: [ *depends-on-configurator, *customizable-image ]
+    restart: unless-stopped
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+    volumes:
+      - *sites-volume
+
+  # ── Queue Workers ─────────────────────────────────────────
+  queue-short:
+    <<: *backend-defaults
+    command:
+      - bench
+      - worker
+      - --queue
+      - short,default
+
+  queue-long:
+    <<: *backend-defaults
+    command:
+      - bench
+      - worker
+      - --queue
+      - long,default,short
+
+  # ── Scheduler ─────────────────────────────────────────────
+  scheduler:
+    <<: *backend-defaults
+    command:
+      - bench
+      - schedule
