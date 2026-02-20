@@ -150,6 +150,36 @@ mkdir -p /mnt/<pool>/apps/hrms/sites
 
 Replace `<pool>` with your actual pool name (e.g. `tank`, `data`, `ssd`).
 
+### 3d. Fix dataset ownership (required for TrueNAS bind mounts)
+
+ZFS datasets are created owned by `root` by default. The containers run as
+non-root users and will fail to write if the ownership is wrong:
+
+| Directory | Container user | UID |
+|-----------|---------------|-----|
+| `sites/`  | `frappe`      | 1000 |
+| `redis/`  | `redis`       | 999  |
+| `mariadb/`| `mysql`       | 999  |
+
+The `compose.yaml` configurator automatically fixes ownership of the `sites/`
+directory on every startup, so that one takes care of itself.
+
+For `mariadb/` and `redis/`, set ownership once before the first `docker compose up`:
+
+```bash
+# MariaDB data — owned by mysql (UID 999)
+chown -R 999:999 /mnt/<pool>/apps/hrms/mariadb
+
+# Redis data — owned by redis (UID 999)
+chown -R 999:999 /mnt/<pool>/apps/hrms/redis
+```
+
+> **Note:** If you prefer to manage all three manually (instead of letting
+> compose fix `sites/`), also run:
+> ```bash
+> chown -R 1000:1000 /mnt/<pool>/apps/hrms/sites
+> ```
+
 ---
 
 ## 4. Phase 3 — Configure Environment
