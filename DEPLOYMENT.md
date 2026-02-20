@@ -17,16 +17,19 @@
 ## 1. Prerequisites
 
 ### TrueNAS Scale
+
 - TrueNAS Scale 24.04 (Dragonfish) or newer (Docker-based app engine)
 - At least one storage pool configured with free space for datasets
 - SSH access to the TrueNAS shell
 
 ### Networking
+
 - A domain or subdomain pointed at your TrueNAS IP (e.g. `hr.yourdomain.com`)
 - An external reverse proxy managing HTTPS — Nginx Proxy Manager (NPM) is recommended
 - Port `8080` (or your chosen `HTTP_PUBLISH_PORT`) reachable by the reverse proxy
 
 ### Build machine (any machine with Docker installed)
+
 - Docker 24+ with BuildKit enabled
 - Internet access to pull from GitHub and Docker Hub
 - The build machine can be your local Mac, a Linux VM, or TrueNAS itself via SSH
@@ -40,7 +43,7 @@ that bundles **frappe + erpnext + payments + hrms**.
 
 ### 2a. Clone the official frappe_docker repo
 
-> **Important:** Clone `frappe_docker` **outside** this project directory. It is a build
+> __Important:__ Clone `frappe_docker` __outside__ this project directory. It is a build
 > dependency, not part of this project. It is excluded by `.gitignore`.
 
 ```bash
@@ -63,6 +66,7 @@ export APPS_JSON_BASE64=$(base64 -w 0 ~/Projects/hrms/apps.json)
 ```
 
 Verify it decoded correctly:
+
 ```bash
 echo $APPS_JSON_BASE64 | base64 --decode
 ```
@@ -85,6 +89,7 @@ docker build \
 ### 2d. Transfer the image to TrueNAS (if built on another machine)
 
 **Option A — Save/load (no registry needed):**
+
 ```bash
 # On build machine
 docker save custom-hrms:15 | gzip > custom-hrms-15.tar.gz
@@ -97,6 +102,7 @@ docker load < /mnt/<pool>/tmp/custom-hrms-15.tar.gz
 ```
 
 **Option B — Push to a private registry (Docker Hub / GHCR):**
+
 ```bash
 # Tag for your registry
 docker tag custom-hrms:15 youruser/custom-hrms:15
@@ -104,8 +110,10 @@ docker tag custom-hrms:15 youruser/custom-hrms:15
 # Push
 docker push youruser/custom-hrms:15
 ```
+
 Then set in `.env`:
-```
+
+```sh
 CUSTOM_IMAGE=youruser/custom-hrms
 PULL_POLICY=always
 ```
@@ -119,7 +127,7 @@ PULL_POLICY=always
 Create these three datasets under your chosen pool. Using separate datasets gives you
 independent ZFS snapshot schedules for database vs. application files.
 
-```
+```ini
 pool
 └── apps
     └── hrms
@@ -135,6 +143,7 @@ pool
    - **Record Size**: 16K (matches InnoDB page size)
    - **Sync**: Standard
    - **Compression**: lz4
+
 3. Create `apps/hrms/redis` with defaults
 4. Create `apps/hrms/sites` with defaults
 
@@ -174,11 +183,12 @@ chown -R 999:999 /mnt/<pool>/apps/hrms/mariadb
 chown -R 999:999 /mnt/<pool>/apps/hrms/redis
 ```
 
-> **Note:** If you prefer to manage all three manually (instead of letting
-> compose fix `sites/`), also run:
-> ```bash
-> chown -R 1000:1000 /mnt/<pool>/apps/hrms/sites
-> ```
+**Note:** If you prefer to manage all three manually (instead of letting
+compose fix `sites/`), also run:
+
+```bash
+chown -R 1000:1000 /mnt/<pool>/apps/hrms/sites
+```
 
 ---
 
@@ -253,7 +263,7 @@ docker compose ps
 
 Expected output — all services should be `running` (configurator will show `exited 0`):
 
-```
+```md
 NAME                 IMAGE              STATUS
 hrms-backend-1       custom-hrms:15     running
 hrms-db-1            mariadb:10.11      running (healthy)
@@ -285,6 +295,7 @@ docker compose exec backend bench new-site hr.yourdomain.com \
 > Replace `hr.yourdomain.com` with the value of `SITE_NAME` in your `.env`.
 
 This takes 5–15 minutes. It will:
+
 1. Create the MariaDB database for your site
 2. Run all Frappe framework migrations
 3. Run all ERPNext migrations
@@ -315,6 +326,7 @@ FLUSH PRIVILEGES;
 ```
 
 Or run it non-interactively using shell substitution:
+
 ```bash
 DB_USER=$(docker compose exec backend \
   python3 -c "import json,sys; d=json.load(open('/home/frappe/frappe-bench/sites/hr.yourdomain.com/site_config.json')); print(d['db_name'])")
@@ -331,8 +343,27 @@ docker compose exec db \
 RENAME USER '${DB_USER}'@'${CURRENT_IP}' TO '${DB_USER}'@'%';
 ALTER USER '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
 FLUSH PRIVILEGES;"
+
 ```
 
+OR — Recreate the missing DB user manually
+
+```bash
+ docker compose exec db \
+mysql -uroot -p"${DB_ROOT_PASSWORD}" -e "
+CREATE USER '_1ac53aa32737700d'@'%' IDENTIFIED BY 'O5dknrg6FintNohG';
+GRANT ALL PRIVILEGES ON \`_1ac53aa32737700d\`.* TO '_1ac53aa32737700d'@'%';
+FLUSH PRIVILEGES;"
+```
+
+and — Also allow localhost login (Frappe needs this)
+```bash
+docker compose exec db \
+mysql -uroot -p"${DB_ROOT_PASSWORD}" -e "
+CREATE USER '_1ac53aa32737700d'@'localhost' IDENTIFIED BY 'O5dknrg6FintNohG';
+GRANT ALL PRIVILEGES ON \`_1ac53aa32737700d\`.* TO '_1ac53aa32737700d'@'localhost';
+FLUSH PRIVILEGES;"
+```
 **Step 2 — Enable the scheduler and set default site**
 
 ```bash
@@ -344,6 +375,7 @@ docker compose exec backend bench use hr.yourdomain.com
 ```
 
 Expected warnings you can safely ignore:
+
 - `MariaDB version 10.11 > 10.8 not yet tested` — cosmetic; 10.11 is fully supported
 - `rename_field: kra_title not found` — harmless data migration notice, no existing data
 - `io_uring_queue_init() failed with EPERM` — macOS/Docker Desktop only; falls back to libaio
@@ -367,8 +399,9 @@ curl -I http://localhost:8080
    - **Domain Names**: `hr.yourdomain.com`
    - **Scheme**: `http`
    - **Forward Hostname/IP**: `<truenas-ip>`
-   - **Forward Port**: `8080` (your `HTTP_PUBLISH_PORT`)
+   - __Forward Port__: `8080` (your `HTTP_PUBLISH_PORT`)
    - **Websockets Support**: ✅ Enabled (required for real-time features)
+
 3. On the **SSL** tab: request a Let's Encrypt certificate
 4. Enable **Force SSL**
 
@@ -377,12 +410,13 @@ curl -I http://localhost:8080
 NPM passes `X-Forwarded-For` and `X-Real-IP` automatically. For Frappe to log the real
 client IP, set in `.env`:
 
-```
+```sh
 UPSTREAM_REAL_IP_ADDRESS=<your-npm-container-or-host-ip>
 UPSTREAM_REAL_IP_HEADER=X-Forwarded-For
 ```
 
 Then restart the frontend:
+
 ```bash
 docker compose restart frontend
 ```
@@ -421,6 +455,7 @@ docker compose exec backend bench --site hr.yourdomain.com migrate
 ### Update MariaDB or Redis
 
 Edit the image tag in `compose.yaml`, then:
+
 ```bash
 docker compose -f compose.yaml -f compose.truenas.yaml pull
 docker compose -f compose.yaml -f compose.truenas.yaml up -d
