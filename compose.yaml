@@ -90,7 +90,7 @@ services:
     restart: on-failure
     # Runs as root so it can fix bind-mount ownership on TrueNAS/Linux hosts
     # (ZFS datasets are created as root:root by default).
-    # gosu drops back to the frappe user before running bench commands.
+    # A final chown restores frappe ownership on all files written during setup.
     user: root
     entrypoint:
       - bash
@@ -98,14 +98,14 @@ services:
     command:
       - >
         chown -R frappe:frappe /home/frappe/frappe-bench/sites &&
-        exec gosu frappe bash -c '
-          ls -1 apps > sites/apps.txt &&
-          bench set-config -g db_host $$DB_HOST &&
-          bench set-config -gp db_port $$DB_PORT &&
-          bench set-config -g redis_cache "redis://$$REDIS_CACHE" &&
-          bench set-config -g redis_queue "redis://$$REDIS_QUEUE" &&
-          bench set-config -g redis_socketio "redis://$$REDIS_QUEUE" &&
-          bench set-config -gp socketio_port $$SOCKETIO_PORT'
+        ls -1 apps > sites/apps.txt &&
+        bench set-config -g db_host $$DB_HOST &&
+        bench set-config -gp db_port $$DB_PORT &&
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE" &&
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE" &&
+        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE" &&
+        bench set-config -gp socketio_port $$SOCKETIO_PORT &&
+        chown -R frappe:frappe /home/frappe/frappe-bench/sites
     environment:
       DB_HOST: db
       DB_PORT: "3306"
